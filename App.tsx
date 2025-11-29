@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { SharedSession, SharedFileEntry, TransferState, FileProgress, FileDownloadStatus } from './types';
 import { FileUpload } from './components/FileUpload';
 import { ActiveShareCard } from './components/ActiveShareCard';
-import { Zap, Shield, Network, Loader2, Download, Share2, AlertCircle, RefreshCw, FileText, Check, ArrowDownToLine, PackageOpen, DownloadCloud, Radio, Activity } from 'lucide-react';
+import { Zap, Shield, Network, Loader2, Download, Share2, AlertCircle, RefreshCw, FileText, Check, ArrowDownToLine, PackageOpen, DownloadCloud, Radio, Activity, Lock, ShieldCheck, Wifi } from 'lucide-react';
 import { peerService } from './services/PeerService';
 
 const EXPIRE_TIME_MS = 10 * 60 * 1000; // 10 Minutes
@@ -342,27 +342,38 @@ function App() {
   };
 
   const finalizeFileDownload = (fileId: string) => {
-      // Prevent double finalization
+      // 1. Create Blob
+      const blob = new Blob(receivedChunksRef.current, { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      
+      // 2. Notify sender
+      peerService.sendMessage(JSON.stringify({ type: 'DOWNLOAD_COMPLETE', fileId }));
+
+      // 3. AUTO SAVE (Direct Download)
+      // Find filename from manifest
+      const fileEntry = remoteManifest?.find(f => f.id === fileId);
+      if (fileEntry) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileEntry.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      // 4. Update State
       setFileProgressMap(prev => {
           if (prev[fileId].status === 'completed' || prev[fileId].status === 'saved') return prev;
-          
-          console.log(`Finalizing ${fileId}`);
-          const blob = new Blob(receivedChunksRef.current, { type: 'application/octet-stream' });
-          const url = URL.createObjectURL(blob);
-          
-          // Notify sender
-          peerService.sendMessage(JSON.stringify({ type: 'DOWNLOAD_COMPLETE', fileId }));
-          
-          // Process next in queue
-          activeFileIdRef.current = null;
-          isQueueProcessingRef.current = false;
-          setTimeout(processDownloadQueue, 100);
-
           return {
               ...prev,
-              [fileId]: { ...prev[fileId], percentage: 100, status: 'completed', blobUrl: url }
+              [fileId]: { ...prev[fileId], percentage: 100, status: 'saved', blobUrl: url }
           };
       });
+
+      // 5. Process Next
+      activeFileIdRef.current = null;
+      isQueueProcessingRef.current = false;
+      setTimeout(processDownloadQueue, 100);
   };
 
   // --- Queue System ---
@@ -400,23 +411,6 @@ function App() {
       processDownloadQueue();
   };
 
-  const saveFileToDisk = (fileId: string, fileName: string) => {
-      const info = fileProgressMap[fileId];
-      if (info && info.blobUrl) {
-          const a = document.createElement('a');
-          a.href = info.blobUrl;
-          a.download = fileName;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          
-          setFileProgressMap(prev => ({
-              ...prev,
-              [fileId]: { ...prev[fileId], status: 'saved' }
-          }));
-      }
-  };
-
   // --- Renders ---
 
   const renderReceiver = () => {
@@ -435,62 +429,73 @@ function App() {
 
       if (!remoteManifest) {
           return (
-             <div className="bg-white p-12 rounded-[2rem] shadow-xl border border-gray-100 flex flex-col items-center mx-4 max-w-sm w-full">
+             <div className="bg-white p-10 md:p-12 rounded-[2rem] shadow-xl border border-gray-100 flex flex-col items-center mx-4 max-w-sm w-full">
                 <div className="relative mb-6">
                     <div className="absolute inset-0 bg-brand-100 rounded-full animate-ping opacity-75"></div>
                     <Loader2 className="w-12 h-12 text-brand-600 animate-spin relative z-10" />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 text-center">{statusText}</h3>
+                <h3 className="text-lg md:text-xl font-bold text-gray-900 text-center">{statusText}</h3>
                 <p className="text-gray-400 text-sm mt-2 text-center">Establishing secure channel...</p>
              </div>
           );
       }
 
       return (
-          <div className="w-full max-w-3xl bg-white rounded-[2rem] shadow-2xl border border-gray-100 overflow-hidden min-h-[500px] flex flex-col animate-in fade-in slide-in-from-bottom-4 mx-4 mb-8">
+          <div className="w-full max-w-lg md:max-w-2xl bg-white rounded-[1.5rem] md:rounded-[2rem] shadow-2xl border border-gray-100 overflow-hidden min-h-[400px] flex flex-col animate-in fade-in slide-in-from-bottom-4 mx-4 mb-8">
               {/* Header */}
-              <div className="p-6 md:p-8 border-b border-gray-100 bg-gray-50/50">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-brand-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-brand-200 shrink-0">
-                             <PackageOpen className="w-6 h-6" />
-                          </div>
-                          <div>
-                              <h2 className="text-xl md:text-2xl font-bold text-gray-900">Ready to Download</h2>
-                              <p className="text-sm text-gray-500 font-medium">
-                                  {remoteManifest.length} Files • {formatBytes(remoteManifest.reduce((a,b) => a+b.size, 0))}
-                              </p>
-                          </div>
+              <div className="p-5 md:p-8 border-b border-gray-100 bg-gray-50/50">
+                  <div className="flex flex-col gap-4">
+                      {/* Security Badge */}
+                      <div className="inline-flex items-center gap-2 self-start bg-green-50 border border-green-100 px-3 py-1 rounded-full">
+                          <ShieldCheck className="w-3 h-3 text-green-600" />
+                          <span className="text-[10px] uppercase font-bold text-green-700 tracking-wider">End-to-End Encrypted</span>
                       </div>
-                      <button 
-                        onClick={handleDownloadAll}
-                        className="hidden md:flex px-6 py-3 bg-gray-900 hover:bg-brand-600 text-white rounded-xl font-bold transition-all shadow-md items-center gap-2"
-                      >
-                          <DownloadCloud className="w-4 h-4" /> Download All
-                      </button>
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3 md:gap-4">
+                            <div className="w-10 h-10 md:w-12 md:h-12 bg-brand-600 rounded-xl md:rounded-2xl flex items-center justify-center text-white shadow-lg shadow-brand-200 shrink-0">
+                                <PackageOpen className="w-5 h-5 md:w-6 md:h-6" />
+                            </div>
+                            <div>
+                                <h2 className="text-lg md:text-2xl font-bold text-gray-900">Ready to Download</h2>
+                                <p className="text-xs md:text-sm text-gray-500 font-medium flex items-center gap-2">
+                                    <span>{remoteManifest.length} Files</span>
+                                    <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                                    <span>{formatBytes(remoteManifest.reduce((a,b) => a+b.size, 0))}</span>
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <button 
+                          onClick={handleDownloadAll}
+                          className="hidden md:flex px-5 py-2.5 bg-gray-900 hover:bg-brand-600 text-white rounded-xl font-bold transition-all shadow-md items-center gap-2 text-sm"
+                        >
+                            <DownloadCloud className="w-4 h-4" /> Download All
+                        </button>
+                      </div>
                   </div>
               </div>
 
               {/* File List */}
-              <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/30">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/30">
                   {remoteManifest.map(file => {
                       const prog = fileProgressMap[file.id];
                       const status = prog?.status || 'idle';
                       
                       return (
-                          <div key={file.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                              <div className="flex items-center gap-4">
+                          <div key={file.id} className="bg-white p-3 md:p-4 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                              <div className="flex items-center gap-3 md:gap-4">
                                   {/* Icon */}
-                                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors
+                                  <div className={`w-10 h-10 md:w-12 md:h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors
                                       ${status === 'completed' || status === 'saved' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500 group-hover:text-brand-600 group-hover:bg-brand-50'}
                                   `}>
-                                      {status === 'downloading' ? <Loader2 className="w-6 h-6 animate-spin text-brand-600" /> : <FileText className="w-6 h-6" />}
+                                      {status === 'downloading' ? <Loader2 className="w-5 h-5 md:w-6 md:h-6 animate-spin text-brand-600" /> : <FileText className="w-5 h-5 md:w-6 md:h-6" />}
                                   </div>
 
                                   {/* Info */}
                                   <div className="flex-1 min-w-0">
-                                      <h4 className="font-bold text-gray-900 truncate text-sm md:text-base">{file.name}</h4>
-                                      <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-gray-500 mt-1">
+                                      <h4 className="font-bold text-gray-900 truncate text-sm md:text-base leading-tight mb-1">{file.name}</h4>
+                                      <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-gray-500">
                                           <span>{formatBytes(file.size)}</span>
                                           {status === 'downloading' && (
                                               <span className="text-brand-600 bg-brand-50 px-2 py-0.5 rounded-full ml-1 border border-brand-100">
@@ -503,7 +508,7 @@ function App() {
                                       
                                       {/* Progress Bar */}
                                       {(status === 'downloading' || status === 'completed' || status === 'saved') && (
-                                          <div className="h-1.5 w-full bg-gray-100 rounded-full mt-3 overflow-hidden">
+                                          <div className="h-1 w-full bg-gray-100 rounded-full mt-2 overflow-hidden">
                                               <div 
                                                   className={`h-full transition-all duration-300 ${status === 'downloading' ? 'bg-brand-600' : 'bg-green-500'}`} 
                                                   style={{ width: `${prog.percentage}%` }}
@@ -517,22 +522,17 @@ function App() {
                                       {status === 'idle' && (
                                           <button 
                                             onClick={() => queueDownload(file.id)}
-                                            className="p-3 bg-gray-50 hover:bg-brand-600 hover:text-white text-gray-600 rounded-xl transition-all shadow-sm"
+                                            className="p-2.5 md:p-3 bg-gray-50 hover:bg-brand-600 hover:text-white text-gray-600 rounded-lg md:rounded-xl transition-all shadow-sm"
                                             title="Download File"
                                           >
                                               <ArrowDownToLine className="w-5 h-5" />
                                           </button>
                                       )}
                                       {(status === 'completed' || status === 'saved') && (
-                                           <button 
-                                              onClick={() => saveFileToDisk(file.id, file.name)}
-                                              className={`px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2
-                                                 ${status === 'saved' ? 'bg-green-50 text-green-700 hover:bg-green-100' : 'bg-brand-600 text-white shadow-brand-200 shadow-lg hover:-translate-y-0.5'}
-                                              `}
-                                           >
-                                               {status === 'saved' ? <Check className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-                                               {status === 'saved' ? 'Saved' : 'Save'}
-                                           </button>
+                                           <div className="px-3 py-1.5 rounded-lg bg-green-50 text-green-700 font-bold text-xs flex items-center gap-1 border border-green-100">
+                                               <Check className="w-3.5 h-3.5" /> 
+                                               <span className="hidden md:inline">Saved</span>
+                                           </div>
                                       )}
                                   </div>
                               </div>
@@ -541,13 +541,13 @@ function App() {
                   })}
               </div>
               
-              {/* Mobile Download All */}
-              <div className="p-4 border-t border-gray-100 md:hidden bg-white sticky bottom-0 z-10">
+              {/* Mobile Download All Sticky Footer */}
+              <div className="p-4 border-t border-gray-100 md:hidden bg-white sticky bottom-0 z-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
                  <button 
                     onClick={handleDownloadAll}
-                    className="w-full py-4 bg-gray-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform"
+                    className="w-full py-3.5 bg-gray-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform text-sm"
                   >
-                      <DownloadCloud className="w-5 h-5" /> Download All Files
+                      <DownloadCloud className="w-4 h-4" /> Download All Files
                   </button>
               </div>
           </div>
@@ -558,14 +558,14 @@ function App() {
 
   if (isReceiver) {
       return (
-        <div className="min-h-screen bg-gray-50 font-sans flex items-center justify-center py-8">
+        <div className="min-h-screen bg-gray-50 font-sans flex items-center justify-center py-6 px-4 md:py-8">
              {renderReceiver()}
         </div>
       );
   }
 
   return (
-    <div className="min-h-screen font-sans selection:bg-brand-100 selection:text-brand-900 bg-[#f8fafc]">
+    <div className="min-h-screen font-sans selection:bg-brand-100 selection:text-brand-900 bg-[#f8fafc] overflow-x-hidden">
       {/* Navbar */}
       <nav className="border-b border-gray-200/50 bg-white/80 backdrop-blur-xl sticky top-0 z-50 transition-all duration-300">
         <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 md:h-20 flex items-center justify-between">
@@ -594,26 +594,28 @@ function App() {
 
       <main className="max-w-6xl mx-auto px-4 md:px-6 py-8 md:py-16 flex flex-col items-center">
         {!activeSession && (
-          <div className="text-center mb-10 md:mb-16 max-w-3xl relative z-10 animate-in slide-in-from-bottom-5 fade-in duration-700 px-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-50 text-brand-600 text-xs font-bold uppercase tracking-widest mb-6 border border-brand-100">
+          <div className="text-center mb-10 md:mb-16 max-w-3xl relative z-10 animate-in slide-in-from-bottom-5 fade-in duration-700 px-2 md:px-4">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-50 text-brand-600 text-[10px] md:text-xs font-bold uppercase tracking-widest mb-6 border border-brand-100 shadow-sm">
                 <Activity className="w-3 h-3" /> Live P2P Network
             </div>
             <h1 className="text-4xl md:text-6xl lg:text-7xl font-extrabold text-gray-900 mb-6 tracking-tight leading-[1.1]">
               Share files <br className="hidden md:block" />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-purple-600 relative">
-                instantly & securely.
-                <svg className="absolute w-full h-3 -bottom-1 left-0 text-brand-200 -z-10" viewBox="0 0 100 10" preserveAspectRatio="none">
-                    <path d="M0 5 Q 50 10 100 5" stroke="currentColor" strokeWidth="8" fill="none" />
+              <span className="relative inline-block pb-2">
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-600 to-purple-600 relative z-10">
+                  instantly.
+                </span>
+                <svg className="absolute w-full h-3 md:h-4 -bottom-1 left-0 text-brand-300 -z-10" viewBox="0 0 200 9" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M2.00025 7.00003C51.5836 2.66669 150.375 -2.49997 198.001 3.50003" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
                 </svg>
               </span>
             </h1>
-            <p className="text-base md:text-xl text-gray-500 mb-8 md:mb-10 leading-relaxed max-w-xl mx-auto font-medium">
-              No server uploads. No file size limits. Direct device-to-device transfer encrypted by WebRTC.
+            <p className="text-sm md:text-xl text-gray-500 mb-8 md:mb-10 leading-relaxed max-w-xl mx-auto font-medium px-4">
+              Direct device-to-device transfer. No limits. No Sign-up.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 md:gap-6 text-xs md:text-sm font-bold text-gray-600">
-              <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100"><Shield className="w-4 h-4 text-brand-600" /> End-to-End Encrypted</div>
-              <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100"><Network className="w-4 h-4 text-purple-600" /> Peer-to-Peer</div>
-              <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100"><Zap className="w-4 h-4 text-amber-500" /> Blazing Fast</div>
+              <div className="flex items-center gap-2 bg-white px-3 py-2 md:px-4 md:py-2 rounded-xl shadow-sm border border-gray-100"><Shield className="w-3 h-3 md:w-4 md:h-4 text-brand-600" /> End-to-End Encrypted</div>
+              <div className="flex items-center gap-2 bg-white px-3 py-2 md:px-4 md:py-2 rounded-xl shadow-sm border border-gray-100"><Network className="w-3 h-3 md:w-4 md:h-4 text-purple-600" /> Peer-to-Peer</div>
+              <div className="flex items-center gap-2 bg-white px-3 py-2 md:px-4 md:py-2 rounded-xl shadow-sm border border-gray-100"><Zap className="w-3 h-3 md:w-4 md:h-4 text-amber-500" /> Blazing Fast</div>
             </div>
           </div>
         )}
@@ -621,13 +623,13 @@ function App() {
         <div className="w-full relative z-10 flex justify-center animate-in zoom-in-95 duration-500">
           {activeSession ? (
             transferState === TransferState.INITIALIZING ? (
-                 <div className="bg-white p-12 rounded-[2.5rem] shadow-xl border border-gray-100 flex flex-col items-center max-w-sm w-full mx-4">
+                 <div className="bg-white p-10 md:p-12 rounded-[2rem] shadow-xl border border-gray-100 flex flex-col items-center max-w-sm w-full mx-4">
                     <div className="relative mb-6">
                         <div className="absolute inset-0 bg-brand-100 rounded-full animate-ping opacity-75"></div>
                         <Loader2 className="w-12 h-12 text-brand-600 animate-spin relative z-10" />
                     </div>
-                    <h3 className="text-xl font-bold text-gray-900">Creating Secure Room...</h3>
-                    <p className="text-gray-400 text-sm mt-2">Generating encryption keys</p>
+                    <h3 className="text-lg md:text-xl font-bold text-gray-900 text-center">Creating Secure Room...</h3>
+                    <p className="text-gray-400 text-sm mt-2 text-center">Generating encryption keys</p>
                  </div>
             ) : (
                 <ActiveShareCard 
@@ -643,8 +645,11 @@ function App() {
         </div>
       </main>
 
-      <footer className="py-8 md:py-12 text-center text-gray-400 text-sm relative z-10 bg-gradient-to-t from-gray-50 to-transparent mt-12">
-        <p className="font-medium">&copy; {new Date().getFullYear()} TempoShare. Built for the modern web.</p>
+      <footer className="py-8 md:py-12 text-center text-gray-400 text-xs md:text-sm relative z-10 bg-gradient-to-t from-gray-50 to-transparent mt-12">
+        <p className="font-medium flex items-center justify-center gap-2">
+            <Lock className="w-3 h-3" />
+            <span>Secure & Private. Data never touches our servers.</span>
+        </p>
       </footer>
     </div>
   );
