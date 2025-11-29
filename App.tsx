@@ -49,6 +49,7 @@ function App() {
   const lastTimeRef = useRef(Date.now());
   const downloadQueueRef = useRef<string[]>([]);
   const isQueueProcessingRef = useRef(false);
+  const manifestIntervalRef = useRef<any>(null);
 
   // --- Initialization ---
   useEffect(() => {
@@ -64,6 +65,13 @@ function App() {
     } else {
       peerService.destroy();
     }
+  }, []);
+
+  // --- Cleanup ---
+  useEffect(() => {
+      return () => {
+          if (manifestIntervalRef.current) clearInterval(manifestIntervalRef.current);
+      };
   }, []);
 
   // --- Speedometer & Logic Loop ---
@@ -137,19 +145,25 @@ function App() {
 
       // Listeners
       peerService.on('connection', (conn) => {
-         // Send Manifest immediately on connection
-         const manifest = sessionFiles.map(({file, ...rest}) => rest);
-         peerService.sendManifest({
-             type: 'MANIFEST',
-             files: manifest,
-             totalSize: newSession.totalSize
-         });
+         console.log("Peer connected. Waiting for manifest request.");
       });
 
       peerService.on('data', (data) => {
          if (typeof data === 'string') {
              try {
                 const msg = JSON.parse(data);
+                
+                // Handle Manifest Request (Handshake)
+                if (msg.type === 'REQUEST_MANIFEST') {
+                     console.log("Received REQUEST_MANIFEST, sending file list.");
+                     const manifest = sessionFiles.map(({file, ...rest}) => rest);
+                     peerService.sendManifest({
+                         type: 'MANIFEST',
+                         files: manifest,
+                         totalSize: newSession.totalSize
+                     });
+                }
+
                 if (msg.type === 'REQUEST_DOWNLOAD') {
                     const fileEntry = sessionFiles.find(f => f.id === msg.fileId);
                     if (fileEntry && fileEntry.file) {
@@ -195,8 +209,20 @@ function App() {
          setTransferState(TransferState.CONNECTING);
          await peerService.connectToHost(hostId);
          
-         setStatusText("Connected. Waiting for file list...");
+         setStatusText("Connected. Requesting file list...");
+         
          setupReceiverListeners();
+
+         // Handshake: Request Manifest
+         const requestManifest = () => {
+            console.log("Requesting manifest...");
+            peerService.sendMessage(JSON.stringify({ type: 'REQUEST_MANIFEST' }));
+         };
+
+         requestManifest();
+         // Retry handshake every 2 seconds until successful
+         if (manifestIntervalRef.current) clearInterval(manifestIntervalRef.current);
+         manifestIntervalRef.current = setInterval(requestManifest, 2000);
 
      } catch (err: any) {
          setTransferState(TransferState.FAILED);
@@ -212,6 +238,12 @@ function App() {
                  const msg = JSON.parse(data);
                  
                  if (msg.type === 'MANIFEST') {
+                     // Handshake Success
+                     if (manifestIntervalRef.current) {
+                         clearInterval(manifestIntervalRef.current);
+                         manifestIntervalRef.current = null;
+                     }
+
                      setRemoteManifest(msg.files);
                      // Initialize progress map
                      const initialMap: Record<string, FileProgress> = {};
@@ -284,8 +316,10 @@ function App() {
       
       peerService.on('disconnected', () => {
          if (transferState !== TransferState.COMPLETED) {
-             setErrorMsg("Connection lost with host.");
-             setTransferState(TransferState.FAILED);
+             // Don't show error if we are just reloading or intentional close
+             // But for now, simple alert
+             // setErrorMsg("Connection lost with host."); 
+             // Keep UI if we have data? No, P2P lost means can't download more.
          }
       });
   };
