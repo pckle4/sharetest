@@ -4,6 +4,8 @@ export interface SharedFileEntry {
   size: number;
   type: string;
   file?: File; // Only present on sender side
+  downloadCount: number;
+  lastDownloaded?: number;
 }
 
 export interface SharedSession {
