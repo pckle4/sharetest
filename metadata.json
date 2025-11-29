@@ -1,0 +1,5 @@
+{
+  "name": "TempoShare",
+  "description": "Secure, temporary file sharing with AI-powered content analysis. Files expire automatically after 10 minutes.",
+  "requestFramePermissions": []
+}
